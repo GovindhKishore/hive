@@ -209,7 +209,8 @@ class HashiCorpVaultStorage(CredentialStorage):
                 mount_point=self._mount,
             )
             return True
-        except Exception:
+        except Exception as e:
+            logger.error(f"Vault exists check failed for '{credential_id}': {e}")
             return False
 
     def _serialize_for_vault(self, credential: CredentialObject) -> dict[str, Any]:
