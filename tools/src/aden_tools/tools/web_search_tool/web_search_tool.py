@@ -19,6 +19,33 @@ from fastmcp import FastMCP
 if TYPE_CHECKING:
     from aden_tools.credentials import CredentialManager
 
+import time
+
+_CACHE = {}
+CACHE_TTL = 300  # seconds
+MAX_CACHE_SIZE = 1000
+
+def _make_cache_key(query, num_results, country, language, provider):
+    return (query, num_results, country, language, provider)
+
+def _get_from_cache(key):
+    entry = _CACHE.get(key)
+    if entry:
+        timestamp, value = entry
+        if time.time() - timestamp < CACHE_TTL:
+            return value
+        else:
+            del _CACHE[key]
+    return None
+
+def _set_cache(key, value):
+    if len(_CACHE) >= MAX_CACHE_SIZE:
+        _CACHE.pop(next(iter(_CACHE)))  # naive FIFO eviction
+    _CACHE[key] = (time.time(), value)
+
+def clear_cache():
+    _CACHE.clear()
+
 
 def register_tools(
     mcp: FastMCP,
@@ -161,6 +188,11 @@ def register_tools(
         Returns:
             Dict with search results, total count, and provider used
         """
+        key = _make_cache_key(query, num_results, country, language, provider)
+        cached = _get_from_cache(key)
+        if cached:
+            return {"cached": True, **cached}
+
         if not query or len(query) > 500:
             return {"error": "Query must be 1-500 characters"}
 
@@ -175,7 +207,7 @@ def register_tools(
                         "error": "Google credentials not configured",
                         "help": "Set GOOGLE_API_KEY and GOOGLE_CSE_ID environment variables",
                     }
-                return _search_google(
+                result =  _search_google(
                     query,
                     num_results,
                     country,
@@ -183,6 +215,9 @@ def register_tools(
                     creds["google_api_key"],
                     creds["google_cse_id"],
                 )
+                if "error" not in result:
+                    _set_cache(key, result)
+                return result
 
             elif provider == "brave":
                 if not brave_available:
@@ -190,13 +225,19 @@ def register_tools(
                         "error": "Brave credentials not configured",
                         "help": "Set BRAVE_SEARCH_API_KEY environment variable",
                     }
-                return _search_brave(query, num_results, country, creds["brave_api_key"])
-
+                result = _search_brave(query, num_results, country, creds["brave_api_key"])
+                if "error" not in result:
+                    _set_cache(key, result)
+                return result
             else:  # auto - try Brave first for backward compatibility
                 if brave_available:
-                    return _search_brave(query, num_results, country, creds["brave_api_key"])
+                    result = _search_brave(query, num_results, country, creds["brave_api_key"])
+                    if "error" not in result:
+                        actual_key = _make_cache_key(query, num_results, country, language, result["provider"])
+                        _set_cache(actual_key, result)
+                    return result
                 elif google_available:
-                    return _search_google(
+                    result = _search_google(
                         query,
                         num_results,
                         country,
@@ -204,6 +245,10 @@ def register_tools(
                         creds["google_api_key"],
                         creds["google_cse_id"],
                     )
+                    if "error" not in result:
+                        actual_key = _make_cache_key(query, num_results, country, language, result["provider"])
+                        _set_cache(actual_key, result)
+                    return result
                 else:
                     return {
                         "error": "No search credentials configured",
