@@ -17,7 +17,7 @@ import httpx
 from fastmcp import FastMCP
 
 if TYPE_CHECKING:
-    from aden_tools.credentials import CredentialManager
+    from aden_tools.credentials import CredentialStoreAdapter
 
 import time
 
@@ -49,7 +49,7 @@ def clear_cache():
 
 def register_tools(
     mcp: FastMCP,
-    credentials: CredentialManager | None = None,
+    credentials: CredentialStoreAdapter | None = None,
 ) -> None:
     """Register web search tools with the MCP server."""
 
