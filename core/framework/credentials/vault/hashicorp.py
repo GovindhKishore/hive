@@ -20,10 +20,14 @@ from ..storage import CredentialStorage
 try:
     from hvac.exceptions import InvalidPath, Forbidden, Unauthorized, VaultError
 except ImportError:
-    class VaultError(Exception): pass
-    class InvalidPath(VaultError): pass
-    class Forbidden(VaultError): pass
-    class Unauthorized(VaultError): pass
+    class VaultError(Exception):
+        pass
+    class InvalidPath(VaultError):
+        pass
+    class Forbidden(VaultError):
+        pass
+    class Unauthorized(VaultError):
+        pass
 
 logger = logging.getLogger(__name__)
 
