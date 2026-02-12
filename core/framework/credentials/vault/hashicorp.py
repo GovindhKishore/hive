@@ -17,7 +17,6 @@ from pydantic import SecretStr
 from ..models import CredentialKey, CredentialObject, CredentialType
 from ..storage import CredentialStorage
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -96,7 +95,7 @@ class HashiCorpVaultStorage(CredentialStorage):
         """
         try:
             import hvac
-            from hvac.exceptions import InvalidPath, Forbidden, Unauthorized, VaultError
+            from hvac.exceptions import Forbidden, InvalidPath, Unauthorized, VaultError
 
             # Store exception classes on the instance for access in other methods
             self._InvalidPath = InvalidPath
