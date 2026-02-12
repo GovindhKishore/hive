@@ -17,13 +17,6 @@ from pydantic import SecretStr
 from ..models import CredentialKey, CredentialObject, CredentialType
 from ..storage import CredentialStorage
 
-try:
-    from hvac.exceptions import InvalidPath, Forbidden, Unauthorized, VaultError
-except Exception:
-    class VaultError(Exception):
-        pass
-    InvalidPath = Forbidden = Unauthorized = VaultError
-
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +96,14 @@ class HashiCorpVaultStorage(CredentialStorage):
         """
         try:
             import hvac
+            from hvac.exceptions import InvalidPath, Forbidden, Unauthorized, VaultError
+
+            # Store exception classes on the instance for access in other methods
+            self._InvalidPath = InvalidPath
+            self._Forbidden = Forbidden
+            self._Unauthorized = Unauthorized
+            self._VaultError = VaultError
+
         except ImportError as e:
             raise ImportError(
                 "HashiCorp Vault support requires 'hvac'. Install with: uv pip install hvac"
@@ -325,14 +326,14 @@ class HashiCorpVaultStorage(CredentialStorage):
                 mount_point=self._mount,
             )
             return response.get("data", {})
-        except InvalidPath:
+        except self._InvalidPath:
             # Secret doesn't exist - this is expected
             return None
-        except (Forbidden, Unauthorized) as e:
+        except (self._Forbidden, self._Unauthorized) as e:
             # Permission/auth errors should be raised
             logger.error(f"Permission denied reading metadata for '{credential_id}': {e}")
             raise
-        except VaultError as e:
+        except self._VaultError as e:
             # Other Vault errors (network, server issues)
             logger.error(f"Failed to read metadata for '{credential_id}': {e}")
             raise
@@ -363,14 +364,14 @@ class HashiCorpVaultStorage(CredentialStorage):
                 )
                 logger.debug(f"Soft deleted latest version of '{credential_id}'")
                 return True
-            except InvalidPath:
+            except self._InvalidPath:
                 # Secret doesn't exist - nothing to delete
                 logger.debug(f"Soft delete (latest): credential '{credential_id}' not found")
                 return False
-            except (Forbidden, Unauthorized) as e:
+            except (self._Forbidden, self._Unauthorized) as e:
                 logger.error(f"Permission denied deleting '{credential_id}': {e}")
                 raise
-            except VaultError as e:
+            except self._VaultError as e:
                 logger.error(f"Soft delete (latest) failed for '{credential_id}': {e}")
                 raise
 
@@ -404,14 +405,14 @@ class HashiCorpVaultStorage(CredentialStorage):
             )
             logger.debug(f"Soft deleted versions {to_delete} of '{credential_id}'")
             return True
-        except InvalidPath:
+        except self._InvalidPath:
             # Race condition - deleted between metadata check and delete
             logger.debug(f"Soft delete: versions not found for '{credential_id}': {to_delete}")
             return False
-        except (Forbidden, Unauthorized) as e:
+        except (self._Forbidden, self._Unauthorized) as e:
             logger.error(f"Permission denied deleting '{credential_id}' versions {to_delete}: {e}")
             raise
-        except VaultError as e:
+        except self._VaultError as e:
             logger.error(f"Soft delete failed for '{credential_id}' versions={to_delete}: {e}")
             raise
 
