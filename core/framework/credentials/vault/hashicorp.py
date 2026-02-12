@@ -17,6 +17,14 @@ from pydantic import SecretStr
 from ..models import CredentialKey, CredentialObject, CredentialType
 from ..storage import CredentialStorage
 
+try:
+    from hvac.exceptions import InvalidPath, Forbidden, Unauthorized, VaultError
+except ImportError:
+    class VaultError(Exception): pass
+    class InvalidPath(VaultError): pass
+    class Forbidden(VaultError): pass
+    class Unauthorized(VaultError): pass
+
 logger = logging.getLogger(__name__)
 
 
@@ -303,6 +311,11 @@ class HashiCorpVaultStorage(CredentialStorage):
 
         Returns:
             Metadata dict or None if not found
+
+        Raises:
+            Forbidden: If token lacks read permissions
+            Unauthorized: If token is invalid/expired
+            VaultError: For other Vault errors
         """
         path = self._path(credential_id)
 
@@ -312,8 +325,17 @@ class HashiCorpVaultStorage(CredentialStorage):
                 mount_point=self._mount,
             )
             return response.get("data", {})
-        except Exception:
+        except InvalidPath:
+            # Secret doesn't exist - this is expected
             return None
+        except (Forbidden, Unauthorized) as e:
+            # Permission/auth errors should be raised
+            logger.error(f"Permission denied reading metadata for '{credential_id}': {e}")
+            raise
+        except VaultError as e:
+            # Other Vault errors (network, server issues)
+            logger.error(f"Failed to read metadata for '{credential_id}': {e}")
+            raise
 
     def soft_delete(self, credential_id: str, versions: list[int] | None = None) -> bool:
         """
@@ -324,26 +346,74 @@ class HashiCorpVaultStorage(CredentialStorage):
             versions: Version numbers to delete. If None, deletes latest.
 
         Returns:
-            True if successful
+            True if successful, False if credential/versions not found
+
+        Raises:
+            Forbidden: If token lacks delete permissions
+            VaultError: For infrastructure/server errors
         """
         path = self._path(credential_id)
 
-        try:
-            if versions:
-                self._client.secrets.kv.v2.delete_secret_versions(
-                    path=path,
-                    versions=versions,
-                    mount_point=self._mount,
-                )
-            else:
+        # Case 1: Delete latest version
+        if versions is None:
+            try:
                 self._client.secrets.kv.v2.delete_latest_version_of_secret(
                     path=path,
                     mount_point=self._mount,
                 )
-            return True
-        except Exception as e:
-            logger.error(f"Soft delete failed for '{credential_id}': {e}")
+                logger.debug(f"Soft deleted latest version of '{credential_id}'")
+                return True
+            except InvalidPath:
+                # Secret doesn't exist - nothing to delete
+                logger.debug(f"Soft delete (latest): credential '{credential_id}' not found")
+                return False
+            except (Forbidden, Unauthorized) as e:
+                logger.error(f"Permission denied deleting '{credential_id}': {e}")
+                raise
+            except VaultError as e:
+                logger.error(f"Soft delete (latest) failed for '{credential_id}': {e}")
+                raise
+
+        # Case 2: Delete specific versions - validate via metadata first
+        metadata = self.get_secret_metadata(credential_id)
+        if metadata is None:
+            logger.debug(f"Soft delete: credential '{credential_id}' not found when reading metadata")
             return False
+
+        # Build set of existing version numbers from metadata
+        versions_dict = metadata.get("versions", {}) or {}
+        existing_versions = {int(k) for k in versions_dict.keys() if k.isdigit()}
+
+        to_delete = [v for v in versions if v in existing_versions]
+        skipped = [v for v in versions if v not in existing_versions]
+
+        if skipped:
+            logger.debug(
+                f"Soft delete skipped non-existent versions for '{credential_id}': {skipped}"
+            )
+
+        if not to_delete:
+            # All requested versions don't exist
+            return False
+
+        try:
+            self._client.secrets.kv.v2.delete_secret_versions(
+                path=path,
+                versions=to_delete,
+                mount_point=self._mount,
+            )
+            logger.debug(f"Soft deleted versions {to_delete} of '{credential_id}'")
+            return True
+        except InvalidPath:
+            # Race condition - deleted between metadata check and delete
+            logger.debug(f"Soft delete: versions not found for '{credential_id}': {to_delete}")
+            return False
+        except (Forbidden, Unauthorized) as e:
+            logger.error(f"Permission denied deleting '{credential_id}' versions {to_delete}: {e}")
+            raise
+        except VaultError as e:
+            logger.error(f"Soft delete failed for '{credential_id}' versions={to_delete}: {e}")
+            raise
 
     def undelete(self, credential_id: str, versions: list[int]) -> bool:
         """
